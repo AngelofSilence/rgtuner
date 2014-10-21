@@ -31,6 +31,8 @@ def make_variants(variable, robot_file, possibilities):
     for i, line in enumerate(lines):
       if variable in line:
           break
+    else:
+      raise IndexError('variable name %s is not found in file %s' % (variable, robot_file))
     assert '=' in line
     for p in possibilities:
         varandp = variable + str(p)
@@ -39,7 +41,6 @@ def make_variants(variable, robot_file, possibilities):
         with open(varandp, 'w') as pfile:
             for line in lines:
                 pfile.write(line)
-
     return filenames
 
 
@@ -59,6 +60,8 @@ def get_current_value(variable, robot_file):
         for line in f:
           if variable in line:
             break
+        else:
+          raise IndexError('variable name %s is not found in file %s' % (variable, robot_file))
     assert '=' in line
     return float(line[line.index('=') + 1:])
 
@@ -95,7 +98,9 @@ def optimize_variable(precision, matchNum, enemies, variable, robot_file, proces
                 robot_file)
     #make double sure we close processes so as to not make a process bomb when testing
     except KeyboardInterrupt:
+        print("terminating pool, please wait...")
         pool.terminate()
+        raise
     #close processes explicitly insead of relying on GC to do it
     pool.close()
     pool.join()
@@ -103,32 +108,39 @@ def optimize_variable(precision, matchNum, enemies, variable, robot_file, proces
 
 def run_match(args):
     #rgkit integration
-    bot1, bot2, n_matches = args
-    res = Runner(player_files=(bot1,bot2), options=Options(n_of_games=n_matches, quiet=4, game_seed=random.randint(0, default_settings.max_seed))).run()
-    dif = 0
-    for scores0, scores1 in res:
-      dif += scores0 - scores1
-    return dif
+    try:
+      bot1, bot2, n_matches = args
+      res = Runner(player_files=(bot1,bot2), options=Options(n_of_games=n_matches, quiet=4, game_seed=random.randint(0, default_settings.max_seed))).run()
+      dif = 0
+      for scores0, scores1 in res:
+        dif += scores0 - scores1
+      return dif
+    #if there is an error, return immediatly so that the program can quit
+    except KeyboardInterrupt:
+      pass
 
 
 def versus(matches_to_run, bot1, bot2, pool):
     """Launches a multithreaded comparison between two robot files.
-    run_match() is run in separate processes, one for each CPU core, until 100
-    matches are run.
-    Returns the winner, or 'tie' if there was no winner."""
+    run_match() is run in separate processes, one for each CPU core by default, until 100
+    matches (default) are run. returns bot1 score - bot2 score"""
     try:
+      #find out pool size
       psize = len(pool._pool)
       rem, mod = divmod(matches_to_run, psize)
       matchnums = []
+      #create list that lists how many matches to run and which bots to run them with
       for _ in xrange(psize):
         if not mod:
           mod -= 1
           matchnums.append((bot1, bot2, rem+1))
         else:
           matchnums.append((bot1,bot2, rem))
+      #sum up all the partial differences returned by the pool
+      #using imap on the list created earlier
       return sum(pool.imap_unordered(run_match, matchnums))
     except KeyboardInterrupt:
-        print('user did ctrl+c, ABORT EVERYTHING')
+        print('user did ctrl+c, ABORT EVERYTHING\n Removing files...')
         for bot in filesRemaining:
             os.remove(bot)
         raise KeyboardInterrupt()
