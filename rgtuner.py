@@ -10,6 +10,7 @@ botScores = {}
 import random
 from rgkit.run import Runner, Options
 from rgkit.settings import settings as default_settings
+
 def make_variants(variable, robot_file, possibilities):
     """Makes variants of the file robot_file  with the constant variable
     changed for each possibility.
@@ -27,18 +28,17 @@ def make_variants(variable, robot_file, possibilities):
     filenames = []
     with open(robot_file, 'r') as f:
         lines = f.readlines()
-       
-        for i, line in enumerate(lines):
-          if variable in line:
-            break
-        assert '=' in line
-        for p in possibilities:
-            varandp = variable + str(p)
-            lines[i] = "%s = %s\n" % (variable, p)
-            filenames.append(varandp)
-            with open(varandp, 'w') as pfile:
-                for line in lines:
-                    pfile.write(line)
+    for i, line in enumerate(lines):
+      if variable in line:
+          break
+    assert '=' in line
+    for p in possibilities:
+        varandp = variable + str(p)
+        lines[i] = "%s = %s\n" % (variable, p)
+        filenames.append(varandp)
+        with open(varandp, 'w') as pfile:
+            for line in lines:
+                pfile.write(line)
 
     return filenames
 
@@ -56,14 +56,14 @@ def get_current_value(variable, robot_file):
     file has the variable name in it.
     """
     with open(robot_file, 'r') as f:
-        for i, line in enumerate(f):
+        for line in f:
           if variable in line:
             break
-        assert '=' in line
+    assert '=' in line
     return float(line[line.index('=') + 1:])
 
 
-def optimize_variable(precisionParam, matchNum, enemies, variable, robot_file, processes):
+def optimize_variable(precision, matchNum, enemies, variable, robot_file, processes):
     pool = multiprocessing.Pool(processes)
     """
     Creates a bunch of variants of the file robot_file, each with variable
@@ -71,72 +71,64 @@ def optimize_variable(precisionParam, matchNum, enemies, variable, robot_file, p
     The file robot_fily is modified to contain the best value, and it is
     returned.
     """
-    base_value = get_current_value(variable, robot_file)
-
-    precision = precisionParam
-
-    while precision >= 0.1:
-        print('RUNNING WITH BASE VALUE', base_value, \
+    try:
+      base_value = get_current_value(variable, robot_file)
+      while precision >= 0.1:
+          print('RUNNING WITH BASE VALUE', base_value, \
                 'PRECISION', precision)
 
-        values_to_test = [base_value - precision,
+          values_to_test = [base_value - precision,
             base_value + precision, base_value]
 
-        files = make_variants(variable, robot_file, values_to_test)
-        best_file = run_tourney(matchNum,enemies, files, pool)
-        best_value = values_to_test[files.index(best_file)]
-        if best_value == base_value:
-            precision /= 2.0
-            print('best value remains', best_value)
-            print('decreasing precision to', precision)
-        else:
-            base_value = best_value
-            print('new \'best\' value is', best_value)
+          files = make_variants(variable, robot_file, values_to_test)
+          best_file = run_tourney(matchNum,enemies, files, pool)
+          best_value = values_to_test[files.index(best_file)]
+          if best_value == base_value:
+              precision /= 2.0
+              print('best value remains', best_value)
+              print('decreasing precision to', precision)
+          else:
+              base_value = best_value
+              print('new \'best\' value is', best_value)
 
-    shutil.copy(make_variants(variable, robot_file, [base_value])[0],
+      shutil.copy(make_variants(variable, robot_file, [base_value])[0],
                 robot_file)
-
+    #make double sure we close processes so as to not make a process bomb when testing
+    except KeyboardInterrupt:
+        pool.terminate()
+    #close processes explicitly insead of relying on GC to do it
+    pool.close()
+    pool.join()
     return base_value
 
-def run_match(bot1, bot2):   
+def run_match(args):
     #rgkit integration
-    runner = Runner(player_files=(bot1,bot2), options=Options(quiet=4, game_seed=random.randint(0, default_settings.max_seed)))
-    scores0, scores1 = runner.run()[0]
-    if scores0 > scores1:
-      return (scores0, scores1, scores0 - scores1, bot1)
-    elif scores1 > scores0:
-      return (scores0, scores1, scores1 - scores0, bot2)
-    else:
-      return (scores0, scores1, 0,'tie')
+    bot1, bot2, n_matches = args
+    res = Runner(player_files=(bot1,bot2), options=Options(n_of_games=n_matches, quiet=4, game_seed=random.randint(0, default_settings.max_seed))).run()
+    dif = 0
+    for scores0, scores1 in res:
+      dif += scores0 - scores1
+    return dif
 
 
-def versus(matchNum,bot1, bot2, pool):
+def versus(matches_to_run, bot1, bot2, pool):
     """Launches a multithreaded comparison between two robot files.
     run_match() is run in separate processes, one for each CPU core, until 100
     matches are run.
     Returns the winner, or 'tie' if there was no winner."""
-    bot1Score = 0
-    bot2Score = 0
-
-    matches_to_run = matchNum
-
     try:
-        results = [pool.apply_async(run_match, (bot1, bot2))
-                   for i in xrange(matches_to_run)]
-        for r in results:
-            s0, s1, s2, s3 = r.get(timeout=120)
-            print('battle result:',s3, ' difference:', s2)
-            bot1Score += s0
-            bot2Score += s1
-
-            #otherwise, it's a tie, but we can ignore it
-
-        print('overall:', bot1, bot1Score, ':', bot2Score, bot2)
-        return bot1Score - bot2Score
-
+      psize = len(pool._pool)
+      rem, mod = divmod(matches_to_run, psize)
+      matchnums = []
+      for _ in xrange(psize):
+        if not mod:
+          mod -= 1
+          matchnums.append((bot1, bot2, rem+1))
+        else:
+          matchnums.append((bot1,bot2, rem))
+      return sum(pool.imap_unordered(run_match, matchnums))
     except KeyboardInterrupt:
         print('user did ctrl+c, ABORT EVERYTHING')
-        pool.terminate()
         for bot in filesRemaining:
             os.remove(bot)
         raise KeyboardInterrupt()
@@ -181,17 +173,18 @@ def run_tourney(matchNum,enemies, botfiles, pool):
                 bestWin[1] = scores[bot1]
                 bestWin[0] = bot1
 
+    bestwin = bestWin[0]
     for bf in botfiles:
-        if not bf == bestWin[0]:
+        if not bf == bestwin:
             print('removing',bf)
             os.remove(bf)
             filesRemaining.remove(bf)
     print('Best Score:',str(bestWin[1]))
-    return bestWin[0]
+    return bestwin
 
 
 def main():
-    
+
     parser = argparse.ArgumentParser(
         description="Optimize constant values for robotgame.")
     parser.add_argument(
