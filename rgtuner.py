@@ -131,7 +131,7 @@ def versus(matches_to_run, bot1, bot2, pool):
       matchnums = []
       #create list that lists how many matches to run and which bots to run them with
       for _ in xrange(psize):
-        if not mod:
+        if mod:
           mod -= 1
           matchnums.append((bot1, bot2, rem+1))
         else:
